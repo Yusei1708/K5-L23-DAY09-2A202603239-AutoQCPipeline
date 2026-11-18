@@ -53,11 +53,25 @@ Bảng tổng hợp toàn bộ **`211` dòng lỗi/cảnh báo** trong `submissi
 
 ## 5. Train: raw vs clean (tùy chọn)
 
-**Chưa chạy** đầy đủ `raw` vs `clean` (theo Phương án 1 vì máy tính cá nhân `i5-1135G7` + `NVIDIA GeForce MX350` 2 GB VRAM gặp tình trạng quá nhiệt tự ngắt sau ~5 phút tải GPU liên tục khi chạy thử `yolo26n` cục bộ ở `imgsz=640`, chưa kịp xuất file vào `submission/results/`).
+Đã thực hiện thí nghiệm đối chứng công bằng trên **Google Colab CPU runtime** (do máy cá nhân quá nhiệt ở `imgsz=640` GPU và Colab T4 lúc chạy báo hết backend GPU HTTP `503`), dùng đúng `scripts/train_compare.py` với cùng siêu tham số rút gọn đồng nhất giữa hai biến thể ([docs/COLAB.md](../docs/COLAB.md)): **`model=yolo26n.pt`**, **`epochs=10`**, **`imgsz=320`**, **`batch=8`**, **`device=cpu`**, **`2` seed (`0`, `1`)**, cùng tập `val` (`data/gold_val`, `40` ảnh) và tập `test` (`data/test`, `100` ảnh, `387` vật thể).
 
-Tuy nhiên, từ nhật ký quét dữ liệu đầu vào trước lúc ngắt và cấu hình thí nghiệm chuẩn hoá cho Colab T4 ([notebooks/day09_train_compare.ipynb](https://colab.research.google.com/github/Yusei1708/K5-L23-DAY09-2A202603239-AutoQCPipeline/blob/main/notebooks/day09_train_compare.ipynb)):
-- Trên tập **`raw` (`224` ảnh gốc)**, Ultralytics âm thầm loại **`11` ảnh** lỗi hỏng/định dạng (`img_0010, 0014, 0020, 0022, 0099, 0104, 0117, 0136, 0179, 0194, 0199` → thực train **`213` ảnh**), làm mất cả ảnh giàu thông tin như `img_0020`/`0099` trong khi **giữ nguyên `5` ảnh rò rỉ `LEAK_TEST`** (`img_0049, 0101, 0167, 0174, 0221`) và **`12` ảnh trùng** (`img_0039..`).
-- Tập **`clean_v1` (`202` ảnh)** đã loại hết `5` ảnh rò rỉ test + `12` ảnh trùng + khôi phục được toàn bộ nhóm ảnh cú pháp (`img_0020, 0099, 0117`...); hướng dẫn chạy tiếp trên **Google Colab T4** đã được cập nhật sẵn `REPO_URL` để chạy bổ sung 15 điểm mà không gây hại nhiệt phần cứng.
+- **Số ảnh thực train:** Tập `raw` nạp `224` ảnh nhưng Ultralytics tự loại **`11` ảnh lỗi/hỏng** (`img_0010, 0014, 0020, 0022, 0099, 0104, 0117, 0136, 0179, 0194, 0199`) → **thực train `213` ảnh** (`19` ảnh nền); tập `clean` (`clean_v1`) **thực train `202` ảnh** (`0` corrupt, `4` ảnh nền, `manifest_sha1 = 2215edeb...`).
+
+Bảng tổng hợp từ `submission/results/comparison.md` (biểu đồ ở `submission/results/comparison.png`):
+
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---|---|---|---|---|---|
+| raw | 224 | 2 | 0.518 ± 0.044 | 0.342 ± 0.023 | 0.645 ± 0.038 | 0.467 ± 0.004 |
+| clean | 202 | 2 | 0.534 ± 0.005 | 0.347 ± 0.016 | 0.695 ± 0.035 | 0.472 ± 0.009 |
+
+Chênh mAP50 (clean − raw) = **+0.016**.
+
+*(Chi tiết từng seed: `raw_seed0 mAP50=0.5489`, `raw_seed1 mAP50=0.4868`; `clean_seed0 mAP50=0.5301`, `clean_seed1 mAP50=0.5370`. Theo lớp TB 2 seed: `car` `0.482 -> 0.506`, `person` `0.677 -> 0.677`, `truck` `0.459 -> 0.446`, `bus` `0.453 -> 0.505`.)*
+
+- **So sánh với độ nhiễu & kết luận trung thực:** Độ chênh **`+0.016` nhỏ hơn hẳn độ lệch chuẩn giữa 2 seed của `raw` (`±0.044`)** và khoảng giá trị chồng lấn nhau (`raw_seed0 = 0.5489` thậm chí cao hơn cả 2 seed của `clean`). Do đó, ở thiết lập 2 seed này **chưa thể kết luận chắc chắn "`clean` cho mAP cao hơn `raw`"** — tín hiệu ổn định hơn ở `clean` là **Precision tăng rõ (`0.645 -> 0.695`, `+0.050`)** và **độ dao động giữa seed giảm mạnh (`std mAP50` từ `0.044` xuống `0.005`)**.
+- **Nguyên nhân kỹ thuật khả dĩ & cách kiểm tiếp theo:**
+  1. **`5` ảnh rò rỉ `LEAK_TEST` trong `raw` (`img_0049, 0101, 0167, 0174, 0221`):** Trùng với `test/` làm điểm đánh giá của `raw` bị nâng giả tạo (đặc biệt ở `raw_seed0`), che khuất lợi thế của `clean`; kiểm chứng bằng cách chạy thêm biến thể `raw_no_leak` bỏ riêng `5` ảnh này trên cùng 2 seed.
+  2. **Tập `clean_v1` mới ở trạng thái `Hold` (`38/202` ảnh cảnh báo ngoài ngân sách `80` chưa duyệt) + cấu hình rút gọn `imgsz=320, epochs=10`:** Vẫn còn lỗi box lỏng (`img_0015`) và sót vật nhỏ (`img_0078, 0160`), lại nén xuống `320 px` trên tập test chỉ `100` ảnh nên phương sai đánh giá cao (ví dụ `truck` chỉ có ít mẫu test nên dao động); kiểm chứng bằng biến thể chuẩn trên `oracle` (`scripts/train_compare.py --variants oracle`) và tăng lên `>= 3–5` seed ở `640 px × 20–40 epoch` khi có GPU T4, đồng thời duyệt bổ sung phần dư hàng đợi để lên `Release`.
 
 ## 6. Quyết định, ghi chú AI và phần thưởng
 
